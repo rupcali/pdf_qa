@@ -7,11 +7,10 @@ from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from pinecone import Pinecone, ServerlessSpec
 import time
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-
+from tempfile import NamedTemporaryFile
+import shutil
 
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -23,13 +22,27 @@ if not PINECONE_API_KEY:
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY ortam değişkenini tanımlayın.")
 
-
 try:
     pc = Pinecone(api_key=PINECONE_API_KEY)
 except Exception as e:
     print(f"Pinecone istemcisi başlatılamadı: {e}")
     pc = None
 
+PROMPT = PromptTemplate(
+    template=(
+        "Aşağıdaki bağlam parçalarına dayanarak soruya kısa ve spesifik bir cevap ver.\n"
+        "Yalnızca bağlamdaki bilgilere dayan; bağlamda yoksa 'Bu soruyu yanıtlayacak bilgi PDF içinde bulunamadı.' de.\n"
+        "Gereksiz açıklama yapma.\n\n"
+        "Soru: {question}\n\n"
+        "Bağlam:\n{context}"
+    ),
+    input_variables=["question", "context"]
+)
+
+app = FastAPI()
+
+DOCSEARCH = None
+CURRENT_PDF_PATH = None
 
 def process_pdf_and_create_index(file_path):
     if pc is None:
@@ -69,17 +82,14 @@ def process_pdf_and_create_index(file_path):
                 existing_index = pc.Index(INDEX_NAME)
                 index_stats = existing_index.describe_index_stats()
                 current_dimension = index_stats.get('dimension', 0)
-
                 if current_dimension != 1536:
                     pc.delete_index(INDEX_NAME)
                     index_exists = False
-                    import time
                     time.sleep(2)
             except Exception as e:
                 try:
                     pc.delete_index(INDEX_NAME)
                     index_exists = False
-                    import time
                     time.sleep(2)
                 except:
                     pass
@@ -106,18 +116,6 @@ def process_pdf_and_create_index(file_path):
         print(f"Pinecone ile ilgili bir hata oluştu: {e}")
         return None
 
-
-PROMPT = PromptTemplate(
-    template=(
-        "Aşağıdaki bağlam parçalarına dayanarak soruya kısa ve spesifik bir cevap ver.\n"
-        "Yalnızca bağlamdaki bilgilere dayan; bağlamda yoksa 'Bu soruyu yanıtlayacak bilgi PDF içinde bulunamadı.' de.\n"
-        "Gereksiz açıklama yapma.\n\n"
-        "Soru: {question}\n\n"
-        "Bağlam:\n{context}"
-    ),
-    input_variables=["question", "context"]
-)
-
 def build_qa_chain(docsearch):
     llm = ChatOpenAI(
         openai_api_key=OPENAI_API_KEY,
@@ -139,7 +137,6 @@ def build_qa_chain(docsearch):
         chain_type_kwargs={"prompt": PROMPT}
     )
     return qa
-
 
 def ask_question(query, docsearch):
     if not docsearch:
@@ -166,10 +163,7 @@ def ask_question(query, docsearch):
         print(f"Soru-cevap sırasında hata oluştu: {e}")
         return None
 
-app = FastAPI()
-
 @app.get("/", response_class=HTMLResponse)
-
 def home():
     if os.path.exists("index.html"):
         return FileResponse("index.html")
@@ -179,17 +173,31 @@ def home():
 def styles():
     return FileResponse("styles.css")
 
-DOCSEARCH = process_pdf_and_create_index("örnek_belge.pdf")
+@app.post("/upload_pdf")
+async def upload_pdf(pdf: UploadFile = File(...)):
+    global DOCSEARCH, CURRENT_PDF_PATH
+    try:
+        with NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            shutil.copyfileobj(pdf.file, tmp)
+            tmp_path = tmp.name
+        DOCSEARCH = process_pdf_and_create_index(tmp_path)
+        CURRENT_PDF_PATH = tmp_path
+        if DOCSEARCH is not None:
+            return {"success": True}
+        else:
+            return JSONResponse({"error": "PDF işlenemedi."}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 def _get_or_init_docsearch():
     global DOCSEARCH
-    if DOCSEARCH is None:
-        DOCSEARCH = process_pdf_and_create_index("ornek.pdf")
     return DOCSEARCH
 
 @app.post("/ask")
 def ask_endpoint(question: str = Form(...)):
     docsearch = _get_or_init_docsearch()
+    if docsearch is None:
+        return JSONResponse({"error": "Önce bir PDF yükleyin."}, status_code=503)
     try:
         result = ask_question(question, docsearch)
         if result and isinstance(result, dict) and "result" in result:
@@ -198,4 +206,3 @@ def ask_endpoint(question: str = Form(...)):
             return JSONResponse({"answer": None, "error": "Yanıt üretilemedi."}, status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
-

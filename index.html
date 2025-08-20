@@ -1,51 +1,152 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="tr">
-
 <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>PDF Soru Cevap — Basit Şablon</title>
+    <meta charset="UTF-8">
+    <title>PDF Soru-Cevap</title>
     <link rel="stylesheet" href="styles.css" />
 </head>
-
 <body>
-    <main class="layout">
-        <section class="panel left-panel">
-            <h1>PDF Soru Cevap</h1>
-        </section>
-
-        <section class="panel right-panel">
-            <form class="qa-form" action="#" method="get" id="qa-form">
-                <label for="question" class="form-label">Size nasıl yardımcı olabilirim?</label>
-                <div class="input-row">
-                    <input id="question" name="question" type="text" placeholder="Sorunuzu yazın…" />
-                    <button type="submit">Sor</button>
-                </div>
-            </form>
-
-
-
-            <div class="answer-wrap">
-                <h2>Gelen Cevap</h2>
+    <div class="main-layout">
+        <div class="sidebar">
+            <h2>PDF Yükle</h2>
+            <div class="pdf-upload-area" id="pdf-upload-area">
+                PDF dosyanızı buraya sürükleyin<br>veya<br>
+                <label style="color:#7f99ad ;cursor:pointer;">
+                    Dosya seçin
+                    <input type="file" id="pdf-input" accept="application/pdf">
+                </label>
             </div>
+            <div class="pdf-filename" id="pdf-filename"></div>
+        </div>
+        <div class="content">
+            <div class="chat-container" id="chat">
+                <div class="empty-msg" id="empty-msg">Size nasıl yardımcı olabilirim?</div>
+            </div>
+            <form class="input-area" id="qform" autocomplete="off">
+                <input id="question" name="question" placeholder="Sorunuzu yazın..." required autocomplete="off" />
+                <button id="askbtn" type="submit">Sor</button>
+            </form>
+        </div>
+    </div>
+    <script>
+        const pdfUploadArea = document.getElementById('pdf-upload-area');
+        const pdfInput = document.getElementById('pdf-input');
+        const pdfFilename = document.getElementById('pdf-filename');
+        let pdfUploaded = false;
 
-            <div class="cevap" id="cevap"></div>
-
-        </section>
-        <script>
-        document.getElementById('qa-form').onsubmit = async function(e) {
+        pdfUploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
-            const q = document.getElementById('question').value;
-            const form = new FormData();
-            form.append('question', q);
-            const res = await fetch('/ask', {method: 'POST', body: form});
-            const data = await res.json();
-            document.getElementById('cevap').innerText = data.answer || data.error || 'Yanıt yok';
-            console.log('Cevap:', data.answer);
+            pdfUploadArea.classList.add('dragover');
+        });
+        pdfUploadArea.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            pdfUploadArea.classList.remove('dragover');
+        });
+        pdfUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            pdfUploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type === "application/pdf") {
+                uploadPDF(file);
+            } else {
+                alert("Lütfen bir PDF dosyası seçin.");
+            }
+        });
+        pdfInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file && file.type === "application/pdf") {
+                uploadPDF(file);
+            } else {
+                alert("Lütfen bir PDF dosyası seçin.");
+            }
+        });
 
+        function uploadPDF(file) {
+            const formData = new FormData();
+            formData.append('pdf', file);
+            pdfFilename.textContent = "Yükleniyor...";
+            fetch('/upload_pdf', {
+                method: 'POST',
+                body: formData
+            })
+            .then(async res => {
+                const data = await res.json();
+                if (res.ok) {
+                    pdfFilename.textContent = "Yüklendi: " + file.name;
+                    pdfUploaded = true;
+                } else {
+                    pdfFilename.textContent = "Yükleme başarısız: " + (data.error || "Bilinmeyen hata");
+                    pdfUploaded = false;
+                }
+            })
+            .catch(() => {
+                pdfFilename.textContent = "Yükleme başarısız.";
+                pdfUploaded = false;
+            });
         }
-    </script>
-    </main>
-</body>
 
-</html>
+        // Sohbet kısmı
+        const chat = document.getElementById('chat');
+        const form = document.getElementById('qform');
+        const askbtn = document.getElementById('askbtn');
+        const questionInput = document.getElementById('question');
+        const emptyMsg = document.getElementById('empty-msg');
+        let dialog = [];
+
+        function renderDialog() {
+            chat.innerHTML = '';
+            if (dialog.length === 0) {
+                chat.appendChild(emptyMsg);
+                emptyMsg.style.display = 'block';
+                return;
+            }
+            emptyMsg.style.display = 'none';
+            // Sıralı şekilde ekle (en eski en üstte)
+            for (let i = 0; i < dialog.length; i++) {
+                const pair = dialog[i];
+                // Soru
+                const userMsg = document.createElement('div');
+                userMsg.className = 'message user';
+                userMsg.textContent = pair.question;
+                chat.appendChild(userMsg);
+                // Cevap
+                const botMsg = document.createElement('div');
+                botMsg.className = 'message bot';
+                botMsg.textContent = pair.answer;
+                chat.appendChild(botMsg);
+            }
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!pdfUploaded) {
+                alert("Lütfen önce bir PDF yükleyin.");
+                return;
+            }
+            const q = questionInput.value.trim();
+            if (!q) return;
+            askbtn.disabled = true;
+            questionInput.value = '';
+            dialog.push({question: q, answer: '...'});
+            renderDialog();
+            try {
+                const res = await fetch('/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ question: q })
+                });
+                const data = await res.json();
+                dialog[dialog.length - 1].answer = data.answer || data.error || 'Yanıt yok';
+                renderDialog();
+            } catch (err) {
+                dialog[dialog.length - 1].answer = 'İstek başarısız: ' + err;
+                renderDialog();
+            } finally {
+                askbtn.disabled = false;
+                questionInput.focus();
+            }
+        });
+
+        questionInput.focus();
+        renderDialog();
+    </script>
