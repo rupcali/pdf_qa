@@ -7,6 +7,10 @@ from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from pinecone import Pinecone, ServerlessSpec
 import time
+from fastapi import FastAPI, Form
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
@@ -106,7 +110,7 @@ def process_pdf_and_create_index(file_path):
 PROMPT = PromptTemplate(
     template=(
         "Aşağıdaki bağlam parçalarına dayanarak soruya kısa ve spesifik bir cevap ver.\n"
-        "Yalnızca bağlamdaki bilgilere dayan; bağlamda yoksa 'Bilmiyorum' de.\n"
+        "Yalnızca bağlamdaki bilgilere dayan; bağlamda yoksa 'Bu soruyu yanıtlayacak bilgi PDF içinde bulunamadı.' de.\n"
         "Gereksiz açıklama yapma.\n\n"
         "Soru: {question}\n\n"
         "Bağlam:\n{context}"
@@ -118,7 +122,7 @@ def build_qa_chain(docsearch):
     llm = ChatOpenAI(
         openai_api_key=OPENAI_API_KEY,
         model_name="gpt-3.5-turbo",
-        temperature=0.1,
+        temperature=0,
         max_tokens=512
     )
 
@@ -162,21 +166,36 @@ def ask_question(query, docsearch):
         print(f"Soru-cevap sırasında hata oluştu: {e}")
         return None
 
+app = FastAPI()
 
-if __name__ == "__main__":
-    pdf_file_path = "örnek_belge.pdf"
+@app.get("/", response_class=HTMLResponse)
 
+def home():
+    if os.path.exists("index.html"):
+        return FileResponse("index.html")
+    return HTMLResponse("<h2>PDF Soru-Cevap</h2><p>index.html bulunamadı.</p>")
+
+@app.get("/styles.css")
+def styles():
+    return FileResponse("styles.css")
+
+DOCSEARCH = process_pdf_and_create_index("örnek_belge.pdf")
+
+def _get_or_init_docsearch():
+    global DOCSEARCH
+    if DOCSEARCH is None:
+        DOCSEARCH = process_pdf_and_create_index("ornek.pdf")
+    return DOCSEARCH
+
+@app.post("/ask")
+def ask_endpoint(question: str = Form(...)):
+    docsearch = _get_or_init_docsearch()
     try:
-        docsearch = process_pdf_and_create_index(pdf_file_path)
-
-        if docsearch:
-            while True:
-                question = input("\nPDF hakkında bir soru sorun (Çıkmak için 'exit' yazın): ")
-                if question.lower() == 'exit':
-                    break
-                result = ask_question(question, docsearch)
-                if result is None:
-                    print("Soru yanıtlanamadı.")
-
+        result = ask_question(question, docsearch)
+        if result and isinstance(result, dict) and "result" in result:
+            return JSONResponse({"answer": result["result"]})
+        else:
+            return JSONResponse({"answer": None, "error": "Yanıt üretilemedi."}, status_code=200)
     except Exception as e:
-        print(f"Programın ana bölümünde bir hata oluştu: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+

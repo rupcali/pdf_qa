@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="tr">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>PDF Soru Cevap — Basit Şablon</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+    <main class="layout">
+        <section class="panel left-panel">
+            <h1>PDF Soru Cevap</h1>
+        </section>
+
+        <section class="panel right-panel">
+            <form class="qa-form" action="#" method="get" id="qa-form">
+                <label for="question" class="form-label">Size nasıl yardımcı olabilirim?</label>
+                <div class="input-row">
+                    <input id="question" name="question" type="text" placeholder="Sorunuzu yazın…" />
+                    <button type="submit">Sor</button>
+                </div>
+            </form>
+
+
+
+            <div class="answer-wrap">
+                <h2>Gelen Cevap</h2>
+            </div>
+
+            <div class="cevap" id="cevap"></div>
+
+        </section>
+        <script>
+        document.getElementById('qa-form').onsubmit = async function(e) {
+            e.preventDefault();
+            const q = document.getElementById('question').value;
+            const form = new FormData();
+            form.append('question', q);
+            const res = await fetch('/ask', {method: 'POST', body: form});
+            const data = await res.json();
+            document.getElementById('cevap').innerText = data.answer || data.error || 'Yanıt yok';
+            console.log('Cevap:', data.answer);
+
+        }
+    </script>
+    </main>
+</body>
+
+</html>
